@@ -1,5 +1,5 @@
 """
-tasks.py - Фоновые задачи (сбор цен, анализ, рассылка)
+tasks.py - Фоновые задачи (УПРОЩЁННАЯ ВЕРСИЯ)
 """
 import time
 import asyncio
@@ -10,24 +10,18 @@ from aiogram import Bot
 from aiogram.utils.exceptions import RetryAfter, TelegramAPIError
 
 from config import (
-    CHECK_INTERVAL, DEFAULT_PAIRS, 
-    MAX_SIGNALS_PER_DAY, SIGNAL_COOLDOWN,
-    BATCH_SEND_SIZE, BATCH_SEND_DELAY
+    CHECK_INTERVAL, DEFAULT_PAIRS, TIMEFRAMES,
+    MAX_SIGNALS_PER_DAY, BATCH_SEND_SIZE, BATCH_SEND_DELAY
 )
 from database import (
     get_all_tracked_pairs, get_pairs_with_users,
     count_signals_today, log_signal
 )
-from indicators import (
-    CANDLES, PRICE_CACHE, fetch_price, analyze_signal
-)
+from indicators import CANDLES, fetch_price, analyze_signal, fetch_candles_binance
 
 logger = logging.getLogger(__name__)
-
-# Глобальный словарь для cooldown сигналов
 LAST_SIGNALS = {}
 
-# ==================== HELPER FUNCTIONS ====================
 async def send_message_safe(bot: Bot, user_id: int, text: str, **kwargs):
     """Безопасная отправка с обработкой rate limit"""
     try:
@@ -39,40 +33,61 @@ async def send_message_safe(bot: Bot, user_id: int, text: str, **kwargs):
     except TelegramAPIError:
         return False
 
-# ==================== TASKS ====================
 async def price_collector(bot: Bot):
-    """Сбор цен с Binance"""
-    logger.info("Price collector started")
+    """Сбор рыночных данных"""
+    logger.info("🔄 Price Collector started")
+    
+    # Сначала загружаем исторические данные
+    logger.info("📥 Loading historical data...")
+    for pair in DEFAULT_PAIRS:
+        for tf in TIMEFRAMES:
+            try:
+                candles = await fetch_candles_binance(pair, tf, 100)
+                if candles:
+                    for candle in candles:
+                        CANDLES.add_candle(pair, tf, candle)
+                    logger.info(f"✅ Loaded {len(candles)} candles for {pair} {tf}")
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.error(f"Error loading {pair} {tf}: {e}")
+    
+    logger.info("✅ Historical data loaded!")
+    
+    # Затем регулярный сбор
     async with httpx.AsyncClient() as client:
         while True:
             try:
-                # Получаем все отслеживаемые пары
+                # Собираем текущие цены
                 pairs = await get_all_tracked_pairs()
                 pairs = list(set(pairs + DEFAULT_PAIRS))
                 
-                # Собираем цены
                 ts = time.time()
                 for pair in pairs:
                     price_data = await fetch_price(client, pair)
                     if price_data:
                         price, volume = price_data
-                        CANDLES.add_price(pair, price, volume, ts)
+                        # Добавляем в свечи
+                        CANDLES.add_candle(pair, "1h", {
+                            't': ts, 'o': price, 'h': price, 
+                            'l': price, 'c': price, 'v': volume
+                        })
                 
-                # Очистка старого кэша
-                PRICE_CACHE.clear_old()
+                logger.info(f"📊 Prices updated for {len(pairs)} pairs")
+                await asyncio.sleep(CHECK_INTERVAL)
                 
             except Exception as e:
                 logger.error(f"Price collector error: {e}")
-            
-            await asyncio.sleep(CHECK_INTERVAL)
+                await asyncio.sleep(60)
 
 async def signal_analyzer(bot: Bot):
     """Анализ и отправка сигналов"""
-    logger.info("Signal analyzer started")
+    logger.info("🎯 Signal Analyzer started")
+    
+    # Ждём загрузки данных
+    await asyncio.sleep(10)
     
     while True:
         try:
-            # Получаем пары и пользователей
             rows = await get_pairs_with_users()
             
             # Группируем по парам
@@ -83,71 +98,54 @@ async def signal_analyzer(bot: Bot):
             # Анализируем каждую пару
             now = time.time()
             for pair, users in pairs_users.items():
-                # Проверка лимита сигналов за день
+                # Проверка лимита
                 signals_today = await count_signals_today(pair)
                 if signals_today >= MAX_SIGNALS_PER_DAY:
                     continue
                 
+                # Cooldown
+                key = pair
+                if now - LAST_SIGNALS.get(key, 0) < 3600:
+                    continue
+                
+                # Анализ
                 signal = analyze_signal(pair)
                 if not signal:
                     continue
                 
-                side = signal["side"]
-                key = (pair, side)
-                
-                # Проверка cooldown
-                if now - LAST_SIGNALS.get(key, 0) < SIGNAL_COOLDOWN:
-                    continue
-                
                 # Формируем сообщение
-                emoji = "📈" if side == "LONG" else "📉"
-                text = f"{emoji} <b>СИГНАЛ</b> ({signal['score']}/100)\n\n"
-                text += f"<b>Монета:</b> {pair}\n"
-                text += f"<b>Вход:</b> {side} @ <code>{signal['price']:.8f}</code>\n\n"
+                side_emoji = "🟢" if signal['side'] == 'LONG' else "🔴"
                 
-                # 3 уровня Take Profit
-                text += f"🎯 <b>TP1:</b> <code>{signal['take_profit_1']:.8f}</code> (+{signal['tp1_percent']:.2f}%) [15% позиции]\n"
-                text += f"🎯 <b>TP2:</b> <code>{signal['take_profit_2']:.8f}</code> (+{signal['tp2_percent']:.2f}%) [40% позиции]\n"
-                text += f"🎯 <b>TP3:</b> <code>{signal['take_profit_3']:.8f}</code> (+{signal['tp3_percent']:.2f}%) [80% позиции]\n\n"
-                
-                text += f"🛡 <b>SL:</b> <code>{signal['stop_loss']:.8f}</code> (-{signal['sl_percent']:.2f}%)\n\n"
-                text += "<b>💡 Причины:</b>\n"
-                for reason in signal["reasons"]:
+                text = f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
+                text += "<b>Логика:</b>\n"
+                for reason in signal['reasons']:
                     text += f"• {reason}\n"
-                text += f"\n⏰ {time.strftime('%H:%M:%S')}"
+                text += "\n"
                 
-                # Батчинг отправки
+                entry_min, entry_max = signal['entry_zone']
+                text += f"🎯 <b>Вход:</b> {entry_min:.2f} – {entry_max:.2f}\n"
+                text += f"🎯 <b>Цели:</b>\n"
+                text += f"   TP1: {signal['take_profit_1']:.2f} (+{signal['tp1_percent']:.2f}%)\n"
+                text += f"   TP2: {signal['take_profit_2']:.2f} (+{signal['tp2_percent']:.2f}%)\n"
+                text += f"   TP3: {signal['take_profit_3']:.2f} (+{signal['tp3_percent']:.2f}%)\n"
+                text += f"🛡 <b>Стоп:</b> {signal['stop_loss']:.2f} (-{signal['sl_percent']:.2f}%)\n\n"
+                text += f"💰 <b>Объём:</b> {signal['position_size']}\n"
+                text += f"📊 <b>Confidence:</b> {signal['confidence']}%\n\n"
+                text += "⏰ " + time.strftime('%H:%M:%S') + "\n"
+                text += "⚠️ <i>Не финансовый совет</i>"
+                
+                # Отправка
                 sent_count = 0
-                for i, user_id in enumerate(users):
+                for user_id in users:
                     if await send_message_safe(bot, user_id, text):
-                        await log_signal(user_id, pair, side, signal["price"], signal["score"])
+                        await log_signal(user_id, pair, signal['side'], signal['price'], signal['confidence'])
                         sent_count += 1
-                    
-                    if (i + 1) % BATCH_SEND_SIZE == 0:
-                        await asyncio.sleep(1)
-                    else:
-                        await asyncio.sleep(BATCH_SEND_DELAY)
+                    await asyncio.sleep(0.05)
                 
                 LAST_SIGNALS[key] = now
-                logger.info(f"Signal sent: {pair} {side} to {sent_count} users")
-                
-                # Добавить сигнал в PnL трекер
-                from pnl_tracker import pnl_tracker
-                signal_data = {
-                    'pair': pair,
-                    'side': side,
-                    'price': signal['price'],
-                    'stop_loss': signal['stop_loss'],
-                    'take_profit_1': signal['take_profit_1'],
-                    'take_profit_2': signal['take_profit_2'],
-                    'take_profit_3': signal['take_profit_3'],
-                    'score': signal['score']
-                }
-                signal_id = await pnl_tracker.add_signal(signal_data)
-                logger.info(f"Signal #{signal_id} added to PnL tracker: {pair} {side}")
-
+                logger.info(f"🎯 Signal: {pair} {signal['side']} to {sent_count} users")
                 
         except Exception as e:
             logger.error(f"Signal analyzer error: {e}")
         
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
