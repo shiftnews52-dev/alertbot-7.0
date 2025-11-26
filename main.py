@@ -1,5 +1,5 @@
 """
-main.py - Точка входа приложения (с PnL трекингом)
+main.py - Точка входа приложения
 """
 import asyncio
 import logging
@@ -12,14 +12,12 @@ from tasks import price_collector, signal_analyzer
 from pnl_tracker import pnl_tracker
 from pnl_tasks import track_signals_pnl
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
 dp = Dispatcher(bot)
 
@@ -44,7 +42,7 @@ async def on_startup(dp):
     loop = asyncio.get_event_loop()
     loop.create_task(price_collector(bot))
     loop.create_task(signal_analyzer(bot))
-    loop.create_task(track_signals_pnl(bot))  # Отслеживание PnL
+    loop.create_task(track_signals_pnl(bot))
     
     logger.info("✅ Bot started successfully!")
 
