@@ -1,9 +1,9 @@
 """
-professional_analyzer.py - Анализ по ТЗ CryptoMicky Alerts (80%+ Confidence) - БЕЗ numpy
+professional_analyzer.py - Анализ по ТЗ CryptoMicky Alerts (80%+ Confidence)
 """
 import logging
 from typing import Dict, List, Optional, Tuple
-import math
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +142,7 @@ class ProfessionalAnalyzer:
             bounce_count = 0
             for j in range(max(0, i-30), min(len(candles), i+30)):
                 if abs(lows[j] - current_low) / current_low <= 0.02:  # 2% tolerance
-                    # Средний объём без numpy
-                    volume_slice = volumes[max(0, j-5):j]
-                    avg_volume = sum(volume_slice) / len(volume_slice) if volume_slice else 0
-                    if volumes[j] > avg_volume:
+                    if volumes[j] > np.mean(volumes[max(0, j-5):j]):
                         bounce_count += 1
             
             if bounce_count >= 2 and current_low < closes[-1]:
@@ -159,10 +156,7 @@ class ProfessionalAnalyzer:
             bounce_count = 0
             for j in range(max(0, i-30), min(len(candles), i+30)):
                 if abs(highs[j] - current_high) / current_high <= 0.02:  # 2% tolerance
-                    # Средний объём без numpy
-                    volume_slice = volumes[max(0, j-5):j]
-                    avg_volume = sum(volume_slice) / len(volume_slice) if volume_slice else 0
-                    if volumes[j] > avg_volume:
+                    if volumes[j] > np.mean(volumes[max(0, j-5):j]):
                         bounce_count += 1
             
             if bounce_count >= 2 and current_high > closes[-1]:
@@ -349,11 +343,11 @@ class ProfessionalAnalyzer:
         base = f"Цена тестирует зону {'поддержки' if side == 'LONG' else 'сопротивления'} {level:.2f}$"
         
         details = []
-        if 'rsi_from_oversold' in conditions or 'rsi_from_overbought' в conditions:
+        if 'rsi_from_oversold' in conditions or 'rsi_from_overbought' in conditions:
             details.append("RSI показывает разворот")
-        if 'volume_decreasing_on_red' in conditions or 'volume_decreasing_on_green' в conditions:
+        if 'volume_decreasing_on_red' in conditions or 'volume_decreasing_on_green' in conditions:
             details.append("объёмы снижаются")
-        if 'btc_not_falling' in conditions or 'btc_not_pumping' в conditions:
+        if 'btc_not_falling' in conditions or 'btc_not_pumping' in conditions:
             details.append("BTC не подтверждает движение")
         
         if details:
@@ -363,22 +357,16 @@ class ProfessionalAnalyzer:
     
     # Вспомогательные методы
     def _calculate_rsi(self, closes: List[float], period: int = 14) -> Optional[float]:
-        """Расчёт RSI без numpy"""
+        """Расчёт RSI"""
         if len(closes) < period + 1:
             return None
         
-        gains = []
-        losses = []
-        for i in range(1, len(closes)):
-            change = closes[i] - closes[i-1]
-            gains.append(max(0, change))
-            losses.append(max(0, -change))
+        deltas = np.diff(closes)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
         
-        if len(gains) < period:
-            return None
-        
-        avg_gain = sum(gains[-period:]) / period
-        avg_loss = sum(losses[-period:]) / period
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
         
         if avg_loss == 0:
             return 100.0
@@ -440,11 +428,11 @@ class ProfessionalAnalyzer:
             if abs(level - current_group[0]) / current_group[0] <= 0.02:  # 2%
                 current_group.append(level)
             else:
-                grouped.append(sum(current_group) / len(current_group))
+                grouped.append(np.mean(current_group))
                 current_group = [level]
         
         if current_group:
-            grouped.append(sum(current_group) / len(current_group))
+            grouped.append(np.mean(current_group))
         
         return grouped
 
