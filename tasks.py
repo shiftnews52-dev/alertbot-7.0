@@ -142,7 +142,7 @@ async def signal_analyzer(bot: Bot):
         
         await asyncio.sleep(60)
 
-def _format_signal_message(signal: Dict) -> str:
+def _format_signal_message(signal: dict) -> str:
     """Форматирование сообщения по ТЗ п.11"""
     side_emoji = "🟢" if signal['side'] == 'LONG' else "🔴"
     
@@ -164,4 +164,5 @@ def _format_signal_message(signal: Dict) -> str:
     text += "⚠️ <i>Не финансовый совет</i>"
     
     return text
+
 
