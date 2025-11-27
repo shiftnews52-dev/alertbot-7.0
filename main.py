@@ -1,5 +1,5 @@
 """
-main.py - Точка входа приложения
+main.py - Точка входа приложения (ПРОФЕССИОНАЛЬНАЯ ВЕРСИЯ)
 """
 import asyncio
 import logging
@@ -23,7 +23,7 @@ dp = Dispatcher(bot)
 
 async def on_startup(dp):
     """Запуск бота"""
-    logger.info("Bot starting...")
+    logger.info("🤖 Professional Bot starting...")
     
     # Удаляем вебхук
     await bot.delete_webhook(drop_pending_updates=True)
@@ -44,11 +44,12 @@ async def on_startup(dp):
     loop.create_task(signal_analyzer(bot))
     loop.create_task(track_signals_pnl(bot))
     
-    logger.info("✅ Bot started successfully!")
+    logger.info("✅ Professional Bot started successfully!")
+    logger.info("🎯 Only 80%+ Confidence signals will be sent!")
 
 async def on_shutdown(dp):
     """Остановка бота"""
-    logger.info("Bot shutting down...")
+    logger.info("🤖 Bot shutting down...")
     await bot.close()
 
 if __name__ == "__main__":
