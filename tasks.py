@@ -4,6 +4,7 @@ tasks.py - Фоновые задачи (ПРОФЕССИОНАЛЬНАЯ ВЕР�
 import time
 import asyncio
 import logging
+from typing import Dict
 from collections import defaultdict
 import httpx
 from aiogram import Bot
@@ -163,3 +164,4 @@ def _format_signal_message(signal: Dict) -> str:
     text += "⚠️ <i>Не финансовый совет</i>"
     
     return text
+
