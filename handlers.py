@@ -3,6 +3,7 @@ handlers.py - Обработчики команд и кнопок (полная 
 """
 import time
 import asyncio
+import logging
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -11,6 +12,8 @@ from config import IMG_START, IMG_ALERTS, IMG_GUIDE, IMG_PAYWALL, IMG_REF
 from database import *
 from indicators import fetch_price
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Состояния пользователей для диалогов
 USER_STATES = {}
@@ -32,38 +35,41 @@ async def send_message_safe_local(bot, user_id: int, text: str, **kwargs):
         return False
 
 async def send_photo_or_text(message_or_call, photo_url: str, text: str, reply_markup=None, is_callback=False):
-    """Отправить фото если есть URL, иначе текст"""
+    """Универсальная отправка фото или текста"""
     try:
-        if photo_url:
-            if is_callback:
-                try:
-                    await message_or_call.message.delete()
-                except:
-                    pass
-                await message_or_call.message.answer_photo(
-                    photo=photo_url,
-                    caption=text,
-                    reply_markup=reply_markup
-                )
-            else:
+        # Если это Message - отправляем фото
+        if hasattr(message_or_call, 'answer_photo'):
+            if photo_url:
                 await message_or_call.answer_photo(
-                    photo=photo_url,
+                    photo_url, 
                     caption=text,
                     reply_markup=reply_markup
                 )
-        else:
-            if is_callback:
-                await message_or_call.message.edit_text(text, reply_markup=reply_markup)
             else:
                 await message_or_call.answer(text, reply_markup=reply_markup)
-    except Exception:
-        if is_callback:
-            try:
-                await message_or_call.message.edit_text(text, reply_markup=reply_markup)
-            except:
+        
+        # Если это CallbackQuery - отправляем новое сообщение
+        elif hasattr(message_or_call, 'message'):
+            if photo_url:
+                await message_or_call.message.answer_photo(
+                    photo_url,
+                    caption=text,
+                    reply_markup=reply_markup
+                )
+            else:
                 await message_or_call.message.answer(text, reply_markup=reply_markup)
-        else:
-            await message_or_call.answer(text, reply_markup=reply_markup)
+            await message_or_call.answer()  # Ответ на callback без параметров
+    
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        # Fallback - просто текст
+        try:
+            if hasattr(message_or_call, 'answer'):
+                await message_or_call.answer(text, reply_markup=reply_markup)
+            elif hasattr(message_or_call, 'message'):
+                await message_or_call.message.answer(text, reply_markup=reply_markup)
+        except:
+            pass
 
 # ==================== KEYBOARDS ====================
 def main_menu_kb(is_admin_user: bool, is_paid_user: bool, lang: str = "ru"):
@@ -712,6 +718,7 @@ def setup_handlers(dp):
         
         USER_STATES.pop(message.from_user.id, None)
         await message.reply(t(lang, "admin_balance_added", amount=amount, uid=uid))
+
     
     # ==================== PnL КОМАНДЫ ====================
     from pnl_handlers import cmd_stats, cmd_active, stats_period_callback, stats_pairs_callback
