@@ -750,3 +750,4 @@ def setup_handlers(dp):
         message.from_user = call.from_user
         await cmd_stats(message)
         await call.answer()
+
