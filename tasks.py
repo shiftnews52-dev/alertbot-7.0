@@ -1,5 +1,5 @@
 """
-tasks_v2.py - Фоновые задачи с CryptoMicky Analyzer
+tasks_v3.py - Фоновые задачи с антиспамом и правильным форматом
 """
 import time
 import asyncio
@@ -11,7 +11,8 @@ from aiogram.utils.exceptions import RetryAfter, TelegramAPIError
 
 from config import (
     CHECK_INTERVAL, DEFAULT_PAIRS, TIMEFRAME,
-    MAX_SIGNALS_PER_DAY, BATCH_SEND_SIZE, BATCH_SEND_DELAY
+    MAX_SIGNALS_PER_DAY, BATCH_SEND_SIZE, BATCH_SEND_DELAY,
+    SIGNAL_COOLDOWN
 )
 from database import (
     get_all_tracked_pairs, get_pairs_with_users,
@@ -21,6 +22,8 @@ from indicators import CANDLES, fetch_price, fetch_candles_binance
 from professional_analyzer_v2 import crypto_micky_analyzer
 
 logger = logging.getLogger(__name__)
+
+# 🔥 АНТИСПАМ: Храним время последнего сигнала для каждой пары
 LAST_SIGNALS = {}
 
 async def send_message_safe(bot: Bot, user_id: int, text: str, **kwargs):
@@ -127,9 +130,18 @@ async def signal_analyzer(bot: Bot):
             # Анализируем каждую пару
             analyzed = 0
             signals_found = 0
+            current_time = time.time()
             
             for pair in active_pairs:
                 analyzed += 1
+                
+                # 🔥 АНТИСПАМ: Проверяем cooldown (по умолчанию 6 часов)
+                if pair in LAST_SIGNALS:
+                    time_since_last = current_time - LAST_SIGNALS[pair]
+                    if time_since_last < SIGNAL_COOLDOWN:
+                        cooldown_left = int((SIGNAL_COOLDOWN - time_since_last) / 60)
+                        logger.debug(f"⏳ {pair}: Cooldown active ({cooldown_left}m left)")
+                        continue
                 
                 # Получаем свечи
                 candles_1h = CANDLES.get_candles(pair, "1h")
@@ -152,7 +164,7 @@ async def signal_analyzer(bot: Bot):
                     
                     # Отправка пользователям
                     users = [row["user_id"] for row in rows if row["pair"] == pair]
-                    text = _format_cryptomicky_signal(signal)
+                    text = _format_micky_alert_signal(signal)
                     
                     sent_count = 0
                     for user_id in users:
@@ -165,7 +177,9 @@ async def signal_analyzer(bot: Bot):
                         await asyncio.sleep(0.05)
                     
                     logger.info(f"📤 Sent to {sent_count}/{len(users)} users")
-                    LAST_SIGNALS[pair] = time.time()
+                    
+                    # 🔥 АНТИСПАМ: Обновляем время последнего сигнала
+                    LAST_SIGNALS[pair] = current_time
             
             # Статистика цикла
             logger.info(f"📊 Cycle: {analyzed} pairs analyzed, {signals_found} signals found")
@@ -178,45 +192,116 @@ async def signal_analyzer(bot: Bot):
         
         await asyncio.sleep(60)
 
-def _format_cryptomicky_signal(signal: dict) -> str:
+def _format_micky_alert_signal(signal: dict) -> str:
     """
-    Форматирование сообщения по ТЗ CryptoMicky п.11
+    Форматирование сообщения КАК НА СКРИНШОТЕ
     
-    Формат:
-    🔻 ETH — SHORT
+    Пример из скриншота:
     
-    Логика: Цена тестирует зону сопротивления 3450–3470$, 
-    объёмы снижаются, RSI разворачивается вниз, BTC не 
-    подтверждает рост.
+    Переслано от 🔥 Micky_Alert
+    🟢 DOTUSDT — LONG
     
-    Сценарий:
-    Вход: 3450–3470$
-    Цели: 3300 → 3180 → 3050$
-    Стоп: 3520$
-    Объём: до 10–12% депо
-    Confidence: 82%
+    Логика:
+    • ✅ Уровень поддержки
+    • 📈 Бычий тренд
+    • 📊 MACD положительный
+    • 💰 Объёмы подтверждают
     
-    ⚠️ Не финансовый совет.
+    🎯 Вход: 2.74 - 2.79
+    🎯 Цели:
+    TP1: 2.89 (+2.00%)
+    TP2: 2.95 (+4.00%)
+    TP3: 3.00 (+6.00%)
+    🛡 Стоп: 2.73 (-3.80%)
+    
+    💰 Объём позиции: 5-8% депо
+    📊 Confidence Score: 70%
+    
+    ⏰ 09:26:46
+    ⚠️ Не финансовый совет
     """
+    
+    # Эмодзи для направления
     side_emoji = "🟢" if signal['side'] == 'LONG' else "🔴"
     
     # Заголовок
-    text = f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
+    text = f"Переслано от 🔥 Micky_Alert\n"
+    text += f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
     
-    # Логика
-    text += f"<b>Логика:</b> {signal['logic']}\n\n"
+    # Логика с эмодзи (из conditions_desc)
+    text += f"<b>Логика:</b>\n"
     
-    # Сценарий
+    # Преобразуем описания условий в красивый формат с эмодзи
+    conditions = signal.get('conditions_desc', [])
+    if conditions:
+        # Добавляем эмодзи к каждому условию
+        for condition in conditions[:4]:  # Берём первые 4
+            if 'поддержки' in condition.lower() or 'support' in condition.lower():
+                text += f"• ✅ Уровень поддержки\n"
+            elif 'сопротивления' in condition.lower() or 'resistance' in condition.lower():
+                text += f"• ✅ Уровень сопротивления\n"
+            elif 'rsi' in condition.lower():
+                if signal['side'] == 'LONG':
+                    text += f"• 📈 RSI бычий\n"
+                else:
+                    text += f"• 📉 RSI медвежий\n"
+            elif 'объём' in condition.lower() or 'volume' in condition.lower():
+                text += f"• 💰 Объёмы подтверждают\n"
+            elif 'btc' in condition.lower():
+                text += f"• 🔥 BTC поддерживает\n"
+            elif 'тренд' in condition.lower() or 'trend' in condition.lower():
+                if signal['side'] == 'LONG':
+                    text += f"• 📈 Бычий тренд\n"
+                else:
+                    text += f"• 📉 Медвежий тренд\n"
+            elif 'работал' in condition.lower() or 'раз' in condition.lower():
+                text += f"• ✅ Проверенный уровень\n"
+    else:
+        # Фоллбэк: базовые условия
+        text += f"• ✅ Уровень {'поддержки' if signal['side'] == 'LONG' else 'сопротивления'}\n"
+        text += f"• 📈 {'Бычий' if signal['side'] == 'LONG' else 'Медвежий'} тренд\n"
+        text += f"• 💰 Объёмы подтверждают\n"
+    
+    text += "\n"
+    
+    # Зона входа
     entry_min, entry_max = signal['entry_zone']
-    text += f"<b>Сценарий:</b>\n"
-    text += f"Вход: {entry_min:.2f}–{entry_max:.2f}$\n"
-    text += f"Цели: {signal['take_profit_1']:.2f} → {signal['take_profit_2']:.2f} → {signal['take_profit_3']:.2f}$\n"
-    text += f"Стоп: {signal['stop_loss']:.2f}$\n"
-    text += f"Объём: {signal['position_size']}\n"
-    text += f"Confidence: {signal['confidence']}% 🎯\n\n"
+    text += f"🎯 <b>Вход:</b> {entry_min:.2f} - {entry_max:.2f}\n"
     
-    # Время и дисклеймер
-    text += "⏰ " + time.strftime('%H:%M:%S') + "\n"
-    text += "⚠️ <i>Не финансовый совет</i>"
+    # Цели
+    text += f"🎯 <b>Цели:</b>\n"
+    
+    # Расчёт процентов для TP
+    entry_price = (entry_min + entry_max) / 2
+    tp1_pct = ((signal['take_profit_1'] - entry_price) / entry_price) * 100
+    tp2_pct = ((signal['take_profit_2'] - entry_price) / entry_price) * 100
+    tp3_pct = ((signal['take_profit_3'] - entry_price) / entry_price) * 100
+    
+    # Для SHORT проценты будут отрицательными, меняем знак
+    if signal['side'] == 'SHORT':
+        tp1_pct = -tp1_pct
+        tp2_pct = -tp2_pct
+        tp3_pct = -tp3_pct
+    
+    text += f"TP1: {signal['take_profit_1']:.2f} ({tp1_pct:+.2f}%)\n"
+    text += f"TP2: {signal['take_profit_2']:.2f} ({tp2_pct:+.2f}%)\n"
+    text += f"TP3: {signal['take_profit_3']:.2f} ({tp3_pct:+.2f}%)\n"
+    
+    # Стоп-лосс
+    sl_pct = ((signal['stop_loss'] - entry_price) / entry_price) * 100
+    if signal['side'] == 'SHORT':
+        sl_pct = -sl_pct
+    
+    text += f"🛡 <b>Стоп:</b> {signal['stop_loss']:.2f} ({sl_pct:+.2f}%)\n\n"
+    
+    # Объём позиции
+    text += f"💰 <b>Объём позиции:</b> {signal['position_size']}\n"
+    
+    # Confidence Score
+    text += f"📊 <b>Confidence Score:</b> {signal['confidence']}%\n\n"
+    
+    # Время
+    text += f"⏰ {time.strftime('%H:%M:%S')}\n"
+    text += f"⚠️ <i>Не финансовый совет</i>"
     
     return text
