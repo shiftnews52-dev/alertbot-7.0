@@ -78,4 +78,3 @@ if __name__ == "__main__":
         logger.error("💡 Solution: Stop all other bot instances and restart")
     except Exception as e:
         logger.error(f"🚨 Failed to start bot: {e}")
-        
