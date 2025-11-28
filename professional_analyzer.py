@@ -46,7 +46,7 @@ class ProfessionalAnalyzer:
             long_signal = self._analyze_long(pair, candles_1h, candles_4h, trend_4h, trend_1d, supports)
             if long_signal:
                 # 🔥 ФИЛЬТР: только сигналы от 80% Confidence
-                if long_signal.get('confidence', 0) >= 80:
+                if long_signal.get('confidence', 0) >= 60:
                     logger.info(f"📊 {pair} LONG: {long_signal['confidence']}% confidence ✅")
                     return long_signal
                 else:
