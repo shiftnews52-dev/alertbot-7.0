@@ -1,5 +1,5 @@
 """
-tasks.py - Фоновые задачи с правильными импортами
+tasks_v2.py - Фоновые задачи с CryptoMicky Analyzer
 """
 import time
 import asyncio
@@ -18,7 +18,7 @@ from database import (
     count_signals_today, log_signal, get_all_user_ids
 )
 from indicators import CANDLES, fetch_price, fetch_candles_binance
-from professional_analyzer import professional_analyzer
+from professional_analyzer_v2 import crypto_micky_analyzer
 
 logger = logging.getLogger(__name__)
 LAST_SIGNALS = {}
@@ -36,7 +36,7 @@ async def send_message_safe(bot: Bot, user_id: int, text: str, **kwargs):
 
 async def price_collector(bot: Bot):
     """Сбор рыночных данных для всех ТФ"""
-    logger.info("🔄 Professional Price Collector started (1H, 4H, 1D)")
+    logger.info("🔄 CryptoMicky Price Collector started (1H, 4H, 1D)")
     
     # Сначала загружаем исторические данные для всех ТФ
     logger.info("📥 Loading historical data for all timeframes...")
@@ -52,6 +52,19 @@ async def price_collector(bot: Bot):
             except Exception as e:
                 logger.error(f"Error loading {pair} {tf}: {e}")
     
+    # Загружаем BTC для всех ТФ
+    logger.info("📥 Loading BTC data...")
+    for tf in ["1h", "4h", "1d"]:
+        try:
+            candles = await fetch_candles_binance("BTCUSDT", tf, 100)
+            if candles:
+                for candle in candles:
+                    CANDLES.add_candle("BTCUSDT", tf, candle)
+                logger.info(f"✅ Loaded {len(candles)} BTC candles {tf}")
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            logger.error(f"Error loading BTCUSDT {tf}: {e}")
+    
     logger.info("✅ Historical data loaded for all timeframes!")
     
     # Затем регулярный сбор
@@ -60,7 +73,7 @@ async def price_collector(bot: Bot):
             try:
                 # Собираем текущие цены
                 pairs = await get_all_tracked_pairs()
-                pairs = list(set(pairs + DEFAULT_PAIRS))
+                pairs = list(set(pairs + DEFAULT_PAIRS + ["BTCUSDT"]))
                 
                 ts = time.time()
                 for pair in pairs:
@@ -81,8 +94,8 @@ async def price_collector(bot: Bot):
                 await asyncio.sleep(60)
 
 async def signal_analyzer(bot: Bot):
-    """Анализ и отправка сигналов по ТЗ (80%+ Confidence только)"""
-    logger.info("🎯 Professional Signal Analyzer started (80%+ Confidence only)")
+    """Анализ и отправка сигналов по ТЗ CryptoMicky"""
+    logger.info("🎯 CryptoMicky Signal Analyzer started (60%+ Confidence)")
     
     # Ждём загрузки данных
     await asyncio.sleep(20)
@@ -94,6 +107,10 @@ async def signal_analyzer(bot: Bot):
         candles_4h = CANDLES.get_candles(pair, "4h")
         candles_1d = CANDLES.get_candles(pair, "1d")
         logger.info(f"📊 {pair} - 1H: {len(candles_1h)}, 4H: {len(candles_4h)}, 1D: {len(candles_1d)}")
+    
+    # Проверяем BTC
+    btc_1h = CANDLES.get_candles("BTCUSDT", "1h")
+    logger.info(f"📊 BTCUSDT - 1H: {len(btc_1h)}")
     
     while True:
         try:
@@ -118,25 +135,32 @@ async def signal_analyzer(bot: Bot):
                 candles_1h = CANDLES.get_candles(pair, "1h")
                 candles_4h = CANDLES.get_candles(pair, "4h") 
                 candles_1d = CANDLES.get_candles(pair, "1d")
+                btc_candles_1h = CANDLES.get_candles("BTCUSDT", "1h")
                 
-                if len(candles_1h) < 50 or len(candles_4h) < 50 or len(candles_1d) < 30:
+                if len(candles_1h) < 100 or len(candles_4h) < 50 or len(candles_1d) < 30:
                     logger.debug(f"⚠️ {pair}: Not enough candles for analysis")
                     continue
                 
-                # Профессиональный анализ (80%+ Confidence)
-                signal = professional_analyzer.analyze_pair(pair, candles_1h, candles_4h, candles_1d)
+                # 🔥 CryptoMicky анализ
+                signal = crypto_micky_analyzer.analyze_pair(
+                    pair, candles_1h, candles_4h, candles_1d, btc_candles_1h
+                )
+                
                 if signal:
                     signals_found += 1
                     logger.info(f"🎯 FOUND SIGNAL: {pair} {signal['side']} ({signal['confidence']}%)")
                     
                     # Отправка пользователям
                     users = [row["user_id"] for row in rows if row["pair"] == pair]
-                    text = _format_signal_message(signal)
+                    text = _format_cryptomicky_signal(signal)
                     
                     sent_count = 0
                     for user_id in users:
                         if await send_message_safe(bot, user_id, text):
-                            await log_signal(user_id, pair, signal['side'], signal['current_price'], signal['confidence'])
+                            await log_signal(
+                                user_id, pair, signal['side'], 
+                                signal['current_price'], signal['confidence']
+                            )
                             sent_count += 1
                         await asyncio.sleep(0.05)
                     
@@ -147,17 +171,36 @@ async def signal_analyzer(bot: Bot):
             logger.info(f"📊 Cycle: {analyzed} pairs analyzed, {signals_found} signals found")
             
             if signals_found == 0:
-                logger.info("💤 No high-confidence signals this cycle (80%+ required)")
+                logger.info("💤 No high-confidence signals this cycle (60%+ required)")
                 
         except Exception as e:
             logger.error(f"Signal analyzer error: {e}")
         
         await asyncio.sleep(60)
 
-def _format_signal_message(signal: dict) -> str:
-    """Форматирование сообщения по ТЗ п.11"""
+def _format_cryptomicky_signal(signal: dict) -> str:
+    """
+    Форматирование сообщения по ТЗ CryptoMicky п.11
+    
+    Формат:
+    🔻 ETH — SHORT
+    
+    Логика: Цена тестирует зону сопротивления 3450–3470$, 
+    объёмы снижаются, RSI разворачивается вниз, BTC не 
+    подтверждает рост.
+    
+    Сценарий:
+    Вход: 3450–3470$
+    Цели: 3300 → 3180 → 3050$
+    Стоп: 3520$
+    Объём: до 10–12% депо
+    Confidence: 82%
+    
+    ⚠️ Не финансовый совет.
+    """
     side_emoji = "🟢" if signal['side'] == 'LONG' else "🔴"
     
+    # Заголовок
     text = f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
     
     # Логика
@@ -166,12 +209,13 @@ def _format_signal_message(signal: dict) -> str:
     # Сценарий
     entry_min, entry_max = signal['entry_zone']
     text += f"<b>Сценарий:</b>\n"
-    text += f"Вход: {entry_min:.2f} – {entry_max:.2f}$\n"
+    text += f"Вход: {entry_min:.2f}–{entry_max:.2f}$\n"
     text += f"Цели: {signal['take_profit_1']:.2f} → {signal['take_profit_2']:.2f} → {signal['take_profit_3']:.2f}$\n"
     text += f"Стоп: {signal['stop_loss']:.2f}$\n"
     text += f"Объём: {signal['position_size']}\n"
     text += f"Confidence: {signal['confidence']}% 🎯\n\n"
     
+    # Время и дисклеймер
     text += "⏰ " + time.strftime('%H:%M:%S') + "\n"
     text += "⚠️ <i>Не финансовый совет</i>"
     
