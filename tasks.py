@@ -1,5 +1,6 @@
 """
-tasks_v3.py - Фоновые задачи с антиспамом и правильным форматом
+tasks.py - Фоновые задачи с антиспамом и форматом Micky_Alert
+ИСПРАВЛЕНО: работает с существующим professional_analyzer
 """
 import time
 import asyncio
@@ -19,7 +20,14 @@ from database import (
     count_signals_today, log_signal, get_all_user_ids
 )
 from indicators import CANDLES, fetch_price, fetch_candles_binance
-from professional_analyzer_v2 import crypto_micky_analyzer
+
+# 🔥 ВАЖНО: Используем существующий анализатор
+try:
+    from professional_analyzer_v2 import crypto_micky_analyzer as analyzer
+    logger.info("✅ Using CryptoMicky Analyzer v2")
+except ImportError:
+    from professional_analyzer import professional_analyzer as analyzer
+    logger.info("✅ Using Professional Analyzer (current)")
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +47,7 @@ async def send_message_safe(bot: Bot, user_id: int, text: str, **kwargs):
 
 async def price_collector(bot: Bot):
     """Сбор рыночных данных для всех ТФ"""
-    logger.info("🔄 CryptoMicky Price Collector started (1H, 4H, 1D)")
+    logger.info("🔄 Price Collector started (1H, 4H, 1D)")
     
     # Сначала загружаем исторические данные для всех ТФ
     logger.info("📥 Loading historical data for all timeframes...")
@@ -97,8 +105,8 @@ async def price_collector(bot: Bot):
                 await asyncio.sleep(60)
 
 async def signal_analyzer(bot: Bot):
-    """Анализ и отправка сигналов по ТЗ CryptoMicky"""
-    logger.info("🎯 CryptoMicky Signal Analyzer started (60%+ Confidence)")
+    """Анализ и отправка сигналов"""
+    logger.info("🎯 Signal Analyzer started with anti-spam (6h cooldown)")
     
     # Ждём загрузки данных
     await asyncio.sleep(20)
@@ -149,12 +157,12 @@ async def signal_analyzer(bot: Bot):
                 candles_1d = CANDLES.get_candles(pair, "1d")
                 btc_candles_1h = CANDLES.get_candles("BTCUSDT", "1h")
                 
-                if len(candles_1h) < 100 or len(candles_4h) < 50 or len(candles_1d) < 30:
+                if len(candles_1h) < 50 or len(candles_4h) < 50 or len(candles_1d) < 30:
                     logger.debug(f"⚠️ {pair}: Not enough candles for analysis")
                     continue
                 
-                # 🔥 CryptoMicky анализ
-                signal = crypto_micky_analyzer.analyze_pair(
+                # Анализ (работает с любым анализатором)
+                signal = analyzer.analyze_pair(
                     pair, candles_1h, candles_4h, candles_1d, btc_candles_1h
                 )
                 
@@ -185,7 +193,7 @@ async def signal_analyzer(bot: Bot):
             logger.info(f"📊 Cycle: {analyzed} pairs analyzed, {signals_found} signals found")
             
             if signals_found == 0:
-                logger.info("💤 No high-confidence signals this cycle (60%+ required)")
+                logger.info("💤 No high-confidence signals this cycle")
                 
         except Exception as e:
             logger.error(f"Signal analyzer error: {e}")
@@ -194,9 +202,7 @@ async def signal_analyzer(bot: Bot):
 
 def _format_micky_alert_signal(signal: dict) -> str:
     """
-    Форматирование сообщения КАК НА СКРИНШОТЕ
-    
-    Пример из скриншота:
+    Форматирование КАК НА СКРИНШОТЕ Micky_Alert
     
     Переслано от 🔥 Micky_Alert
     🟢 DOTUSDT — LONG
@@ -204,7 +210,6 @@ def _format_micky_alert_signal(signal: dict) -> str:
     Логика:
     • ✅ Уровень поддержки
     • 📈 Бычий тренд
-    • 📊 MACD положительный
     • 💰 Объёмы подтверждают
     
     🎯 Вход: 2.74 - 2.79
@@ -228,39 +233,41 @@ def _format_micky_alert_signal(signal: dict) -> str:
     text = f"Переслано от 🔥 Micky_Alert\n"
     text += f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
     
-    # Логика с эмодзи (из conditions_desc)
+    # Логика с эмодзи
     text += f"<b>Логика:</b>\n"
     
-    # Преобразуем описания условий в красивый формат с эмодзи
-    conditions = signal.get('conditions_desc', [])
-    if conditions:
-        # Добавляем эмодзи к каждому условию
-        for condition in conditions[:4]:  # Берём первые 4
-            if 'поддержки' in condition.lower() or 'support' in condition.lower():
-                text += f"• ✅ Уровень поддержки\n"
-            elif 'сопротивления' in condition.lower() or 'resistance' in condition.lower():
-                text += f"• ✅ Уровень сопротивления\n"
-            elif 'rsi' in condition.lower():
-                if signal['side'] == 'LONG':
-                    text += f"• 📈 RSI бычий\n"
-                else:
-                    text += f"• 📉 RSI медвежий\n"
-            elif 'объём' in condition.lower() or 'volume' in condition.lower():
-                text += f"• 💰 Объёмы подтверждают\n"
-            elif 'btc' in condition.lower():
-                text += f"• 🔥 BTC поддерживает\n"
-            elif 'тренд' in condition.lower() or 'trend' in condition.lower():
-                if signal['side'] == 'LONG':
-                    text += f"• 📈 Бычий тренд\n"
-                else:
-                    text += f"• 📉 Медвежий тренд\n"
-            elif 'работал' in condition.lower() or 'раз' in condition.lower():
-                text += f"• ✅ Проверенный уровень\n"
+    # Формируем логику из доступных данных
+    logic_items = []
+    
+    # Базовые условия всегда есть
+    if signal['side'] == 'LONG':
+        logic_items.append("• ✅ Уровень поддержки")
+        logic_items.append("• 📈 Бычий тренд")
     else:
-        # Фоллбэк: базовые условия
-        text += f"• ✅ Уровень {'поддержки' if signal['side'] == 'LONG' else 'сопротивления'}\n"
-        text += f"• 📈 {'Бычий' if signal['side'] == 'LONG' else 'Медвежий'} тренд\n"
-        text += f"• 💰 Объёмы подтверждают\n"
+        logic_items.append("• ✅ Уровень сопротивления")
+        logic_items.append("• 📉 Медвежий тренд")
+    
+    # Добавляем условия из signal если есть
+    if 'logic' in signal:
+        logic_str = signal['logic'].lower()
+        if 'rsi' in logic_str:
+            if signal['side'] == 'LONG':
+                logic_items.append("• 📈 RSI бычий")
+            else:
+                logic_items.append("• 📉 RSI медвежий")
+        if 'объём' in logic_str or 'volume' in logic_str:
+            logic_items.append("• 💰 Объёмы подтверждают")
+        if 'btc' in logic_str:
+            logic_items.append("• 🔥 BTC поддерживает")
+        if 'macd' in logic_str:
+            logic_items.append("• 📊 MACD положительный" if signal['side'] == 'LONG' else "• 📊 MACD отрицательный")
+    else:
+        # Фоллбэк: стандартные условия
+        logic_items.append("• 💰 Объёмы подтверждают")
+    
+    # Выводим максимум 4 пункта
+    for item in logic_items[:4]:
+        text += item + "\n"
     
     text += "\n"
     
