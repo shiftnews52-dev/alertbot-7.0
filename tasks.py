@@ -1,6 +1,5 @@
 """
-tasks.py - Фоновые задачи с антиспамом и правильным форматом
-ПРАВИЛЬНЫЙ ИМПОРТ: from professional_analyzer import crypto_micky_analyzer
+tasks.py - Фоновые задачи с антиспамом и упрощённым форматом
 """
 import time
 import asyncio
@@ -24,7 +23,6 @@ from professional_analyzer import crypto_micky_analyzer
 
 logger = logging.getLogger(__name__)
 
-# Антиспам: храним время последнего сигнала для каждой пары
 LAST_SIGNALS = {}
 
 async def send_message_safe(bot: Bot, user_id: int, text: str, **kwargs):
@@ -152,7 +150,7 @@ async def signal_analyzer(bot: Bot):
                     logger.info(f"🎯 FOUND SIGNAL: {pair} {signal['side']} ({signal['confidence']}%)")
                     
                     users = [row["user_id"] for row in rows if row["pair"] == pair]
-                    text = _format_micky_alert_signal(signal)
+                    text = _format_signal(signal)
                     
                     sent_count = 0
                     for user_id in users:
@@ -177,14 +175,21 @@ async def signal_analyzer(bot: Bot):
         
         await asyncio.sleep(60)
 
-def _format_micky_alert_signal(signal: dict) -> str:
-    """Форматирование сообщения КАК НА СКРИНШОТЕ"""
+def _format_signal(signal: dict) -> str:
+    """
+    Форматирование сигнала - упрощённый формат
+    - БЕЗ "Переслано от"
+    - БЕЗ времени
+    - Confidence: HIGH (90%+) / MEDIUM (80-89%) / LOW (70-79%)
+    - Цели БЕЗ процентов
+    """
     
     side_emoji = "🟢" if signal['side'] == 'LONG' else "🔴"
     
-    text = f"Переслано от 🔥 Micky_Alert\n"
-    text += f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
+    # Заголовок
+    text = f"{side_emoji} <b>{signal['pair']} — {signal['side']}</b>\n\n"
     
+    # Логика с эмодзи
     text += f"<b>Логика:</b>\n"
     
     conditions = signal.get('conditions_desc', [])
@@ -217,35 +222,34 @@ def _format_micky_alert_signal(signal: dict) -> str:
     
     text += "\n"
     
+    # Зона входа
     entry_min, entry_max = signal['entry_zone']
     text += f"🎯 <b>Вход:</b> {entry_min:.2f} - {entry_max:.2f}\n"
     
+    # Цели БЕЗ процентов
     text += f"🎯 <b>Цели:</b>\n"
+    text += f"TP1: {signal['take_profit_1']:.2f}\n"
+    text += f"TP2: {signal['take_profit_2']:.2f}\n"
+    text += f"TP3: {signal['take_profit_3']:.2f}\n"
     
-    entry_price = (entry_min + entry_max) / 2
-    tp1_pct = ((signal['take_profit_1'] - entry_price) / entry_price) * 100
-    tp2_pct = ((signal['take_profit_2'] - entry_price) / entry_price) * 100
-    tp3_pct = ((signal['take_profit_3'] - entry_price) / entry_price) * 100
+    # Стоп-лосс БЕЗ процентов
+    text += f"🛡 <b>Стоп:</b> {signal['stop_loss']:.2f}\n\n"
     
-    if signal['side'] == 'SHORT':
-        tp1_pct = -tp1_pct
-        tp2_pct = -tp2_pct
-        tp3_pct = -tp3_pct
-    
-    text += f"TP1: {signal['take_profit_1']:.2f} ({tp1_pct:+.2f}%)\n"
-    text += f"TP2: {signal['take_profit_2']:.2f} ({tp2_pct:+.2f}%)\n"
-    text += f"TP3: {signal['take_profit_3']:.2f} ({tp3_pct:+.2f}%)\n"
-    
-    sl_pct = ((signal['stop_loss'] - entry_price) / entry_price) * 100
-    if signal['side'] == 'SHORT':
-        sl_pct = -sl_pct
-    
-    text += f"🛡 <b>Стоп:</b> {signal['stop_loss']:.2f} ({sl_pct:+.2f}%)\n\n"
-    
+    # Объём позиции
     text += f"💰 <b>Объём позиции:</b> {signal['position_size']}\n"
-    text += f"📊 <b>Confidence Score:</b> {signal['confidence']}%\n\n"
     
-    text += f"⏰ {time.strftime('%H:%M:%S')}\n"
+    # Confidence: HIGH (90%+) / MEDIUM (80-89%) / LOW (70-79%)
+    confidence_pct = signal['confidence']
+    if confidence_pct >= 90:
+        confidence_level = "HIGH"
+    elif confidence_pct >= 80:
+        confidence_level = "MEDIUM"
+    else:
+        confidence_level = "LOW"
+    
+    text += f"📊 <b>Confidence:</b> {confidence_level}\n\n"
+    
+    # БЕЗ времени, только дисклеймер
     text += f"⚠️ <i>Не финансовый совет</i>"
     
     return text
