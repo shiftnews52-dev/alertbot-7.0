@@ -8,7 +8,7 @@ from typing import List
 from datetime import datetime
 import aiosqlite
 
-from config import DB_PATH ADMIN_IDS
+from config import DB_PATH, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -298,4 +298,5 @@ async def add_balance(uid: int, amount: float):
 async def init_db():
     """Инициализация базы данных"""
     await db_pool.init()
+
 
