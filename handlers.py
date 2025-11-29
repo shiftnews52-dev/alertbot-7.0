@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS, DEFAULT_PAIRS
 from database import (
-    get_user_subscription, update_subscription,
+    update_subscription,
     add_tracked_pair, remove_tracked_pair, get_user_pairs,
     is_user_subscribed
 )
