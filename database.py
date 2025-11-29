@@ -1,14 +1,14 @@
-""" database.py - Работа с базой данных """
+"""database.py - Работа с базой данных для alertbot-7.0"""
 
 import time
 import asyncio
 import logging
 from typing import List
-from datetime import datetime
+import datetime
 
 import aiosqlite
 
-from config import DB_PATH
+from config import DB_PATH, ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS users (
     balance REAL DEFAULT 0,
     paid INTEGER DEFAULT 0,
     language TEXT DEFAULT 'ru',
-    created_ts INTEGER NOT NULL
+    created_ts INTEGER NOT NULL,
+    subscription_expires_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS user_pairs (
@@ -59,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_users_paid
 
 
 class DBPool:
-    """Пул соединений к БД"""
+    """Пул соединений к SQLite"""
 
     def __init__(self, path: str, pool_size: int = 5):
         self.path = path
@@ -84,11 +85,21 @@ class DBPool:
         try:
             await conn.executescript(INIT_SQL)
             await conn.commit()
+
+            # на случай старой БД — добавляем колонку subscription_expires_at, если её нет
+            cursor = await conn.execute("PRAGMA table_info(users)")
+            cols = [row["name"] for row in await cursor.fetchall()]
+            if "subscription_expires_at" not in cols:
+                await conn.execute(
+                    "ALTER TABLE users ADD COLUMN subscription_expires_at TEXT"
+                )
+                await conn.commit()
+                logger.info("✅ Added column subscription_expires_at to users")
         finally:
             await self.release(conn)
 
         self._initialized = True
-        logger.info(f"Database pool initialized with {self.pool_size} connections")
+        logger.info(f"✅ Database pool initialized with {self.pool_size} connections")
 
     async def acquire(self) -> aiosqlite.Connection:
         return await self._available.get()
@@ -103,6 +114,13 @@ class DBPool:
 
 # Глобальный пул
 db_pool = DBPool(DB_PATH, pool_size=5)
+
+# Сет админов (чтобы быстро проверять подписку для тебя)
+try:
+    ADMIN_IDS_SET = {int(x) for x in ADMIN_IDS}
+except TypeError:
+    # если ADMIN_IDS не итерируемый (одно число)
+    ADMIN_IDS_SET = {int(ADMIN_IDS)}
 
 # ==================== USER FUNCTIONS ====================
 
@@ -135,7 +153,7 @@ async def set_user_lang(uid: int, lang: str):
 
 
 async def is_paid(uid: int) -> bool:
-    """Проверить, оплачен ли доступ (старая версия)"""
+    """Проверить флаг paid (старый способ)"""
     conn = await db_pool.acquire()
     try:
         cursor = await conn.execute(
@@ -163,7 +181,7 @@ async def get_user_balance(uid: int) -> float:
 
 
 async def get_user_refs_count(uid: int) -> int:
-    """Получить количество рефералов (оплативших)"""
+    """Получить количество платящих рефералов"""
     conn = await db_pool.acquire()
     try:
         cursor = await conn.execute(
@@ -180,7 +198,7 @@ async def get_user_refs_count(uid: int) -> int:
 
 
 async def get_user_pairs(uid: int) -> List[str]:
-    """Получить все пары пользователя"""
+    """Получить все пары пользователя (для /list и my_coins)"""
     conn = await db_pool.acquire()
     try:
         cursor = await conn.execute(
@@ -194,7 +212,7 @@ async def get_user_pairs(uid: int) -> List[str]:
 
 
 async def add_user_pair(uid: int, pair: str):
-    """Старая функция: добавить пару (без возврата флага)"""
+    """Старая функция без возврата"""
     conn = await db_pool.acquire()
     try:
         await conn.execute(
@@ -207,7 +225,7 @@ async def add_user_pair(uid: int, pair: str):
 
 
 async def remove_user_pair(uid: int, pair: str):
-    """Старая функция: удалить пару (без возврата флага)"""
+    """Старая функция без возврата"""
     conn = await db_pool.acquire()
     try:
         await conn.execute(
@@ -271,7 +289,9 @@ async def count_signals_today(pair: str) -> int:
     conn = await db_pool.acquire()
     try:
         today_start = int(
-            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            datetime.datetime.now()
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp()
         )
         cursor = await conn.execute(
             """
@@ -386,86 +406,54 @@ async def add_balance(uid: int, amount: float):
         await db_pool.release(conn)
 
 
-# ==================== ФУНКЦИИ ДЛЯ ПОДПИСКИ (ДЛЯ handlers.py) ====================
+# ==================== ПОДПИСКА (ДЛЯ handlers.py) ====================
 
 
 async def is_user_subscribed(uid: int) -> bool:
     """
-    Совместимая обёртка для handlers.py.
-    Сейчас просто проверяет флаг paid.
-    """
-    return await is_paid(uid)
+    Проверяет, есть ли у пользователя активная подписка.
 
-
-async def update_subscription(uid: int, days: int):
+    Логика:
+    - если uid в ADMIN_IDS → всегда True (ты как хозяин бота)
+    - иначе смотрим paid и дату subscription_expires_at
     """
-    Активировать/продлить подписку пользователю.
+    # админ всегда с доступом
+    if uid in ADMIN_IDS_SET:
+        return True
 
-    В этой версии срок по дням НЕ хранится,
-    мы просто ставим paid = 1. Параметр days оставлен
-    для совместимости с handlers.py.
-    """
     conn = await db_pool.acquire()
     try:
-        await conn.execute(
-            "INSERT OR IGNORE INTO users(id, created_ts) VALUES(?, ?)",
-            (uid, int(time.time())),
-        )
-        await conn.execute(
-            "UPDATE users SET paid = 1 WHERE id = ?",
+        cursor = await conn.execute(
+            """
+            SELECT paid, subscription_expires_at
+            FROM users
+            WHERE id = ?
+            """,
             (uid,),
         )
-        await conn.commit()
-        logger.info(f"Updated subscription for user {uid}, +{days} days (flag paid=1)")
+        row = await cursor.fetchone()
+
+        if not row:
+            return False
+
+        paid = bool(row["paid"])
+        exp = row["subscription_expires_at"]
+
+        # если даты нет — просто возвращаем paid
+        if not exp:
+            return paid
+
+        try:
+            exp_dt = datetime.datetime.fromisoformat(exp)
+        except Exception:
+            # если дата битая — считаем по флагу
+            return paid
+
+        # активна, если paid == 1 и срок ещё не истёк
+        return paid and exp_dt > datetime.datetime.now()
+
     finally:
         await db_pool.release(conn)
 
 
-async def add_tracked_pair(uid: int, pair: str) -> bool:
-    """
-    Добавить монету пользователю (используется в handlers.py).
-
-    Возвращает:
-        True  - если пара была добавлена впервые
-        False - если такая пара уже была
-    """
-    pair = pair.upper()
-    conn = await db_pool.acquire()
-    try:
-        cursor = await conn.execute(
-            "INSERT OR IGNORE INTO user_pairs(user_id, pair) VALUES(?, ?)",
-            (uid, pair),
-        )
-        await conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        await db_pool.release(conn)
-
-
-async def remove_tracked_pair(uid: int, pair: str) -> bool:
-    """
-    Удалить монету пользователя (используется в handlers.py).
-
-    Возвращает:
-        True  - если пара была удалена
-        False - если такой пары не было
-    """
-    pair = pair.upper()
-    conn = await db_pool.acquire()
-    try:
-        cursor = await conn.execute(
-            "DELETE FROM user_pairs WHERE user_id = ? AND pair = ?",
-            (uid, pair),
-        )
-        await conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        await db_pool.release(conn)
-
-
-# ==================== INIT ====================
-
-
-async def init_db():
-    """Инициализация базы данных"""
-    await db_pool.init()
+async def update_subscription(uid: int, days:_
