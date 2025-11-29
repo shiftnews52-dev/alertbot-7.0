@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS, DEFAULT_PAIRS
 from database import (
-    add_user, get_user_subscription, update_subscription,
+    get_user_subscription, update_subscription,
     add_tracked_pair, remove_tracked_pair, get_user_pairs,
     is_user_subscribed
 )
@@ -32,7 +32,6 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
     
-    await add_user(user_id, username)
     logger.info(f"👤 User {user_id} ({username}) started bot")
     
     # Проверяем подписку
@@ -129,11 +128,6 @@ async def callback_payment(callback: types.CallbackQuery):
     tariff_name, amount, days = tariff_map[callback.data]
     
     # Создаём инвойс для CryptoBot
-    # Формат: https://t.me/CryptoBot?start=invoice-{amount}-{currency}-{description}
-    
-    # Для реальной интеграции нужен API CryptoBot
-    # Здесь показываем инструкцию
-    
     text = (
         f"💳 <b>Оплата: {tariff_name}</b>\n\n"
         f"💰 Сумма: {amount} USDT\n\n"
@@ -148,7 +142,6 @@ async def callback_payment(callback: types.CallbackQuery):
     keyboard = InlineKeyboardMarkup(row_width=1)
     
     # Ссылка на CryptoBot с инвойсом
-    # В реальности здесь будет API-вызов для создания инвойса
     cryptobot_link = f"https://t.me/CryptoBot?start=pay_{user_id}_{callback.data}"
     
     keyboard.add(
@@ -158,7 +151,6 @@ async def callback_payment(callback: types.CallbackQuery):
     
     await callback.message.edit_text(text, reply_markup=keyboard)
     
-    # Логируем попытку оплаты
     logger.info(f"💳 User {user_id} initiated payment: {tariff_name} - {amount} USDT")
 
 # ============================================================
@@ -183,13 +175,11 @@ async def process_promo(message: types.Message, state: FSMContext):
     promo_code = message.text.strip().upper()
     user_id = message.from_user.id
     
-    # Здесь проверка промокода
-    # Пример: промокоды в БД или хардкод
-    
+    # Проверка промокода
     valid_promos = {
-        "START2024": 30,  # 30 дней
-        "CRYPTO50": 7,    # 7 дней
-        "WELCOME": 14     # 14 дней
+        "START2024": 30,
+        "CRYPTO50": 7,
+        "WELCOME": 14
     }
     
     if promo_code in valid_promos:
@@ -441,7 +431,7 @@ async def cmd_help(message: types.Message):
 # РЕГИСТРАЦИЯ ХЕНДЛЕРОВ
 # ============================================================
 
-def register_handlers(dp):
+def setup_handlers(dp):
     """Регистрация всех обработчиков"""
     # Команды
     dp.register_message_handler(cmd_start, commands=['start'])
@@ -462,4 +452,3 @@ def register_handlers(dp):
     # FSM обработчики
     dp.register_message_handler(process_promo, state=PromoState.waiting_for_promo)
     dp.register_message_handler(process_support, state=SupportState.waiting_for_message)
-    
