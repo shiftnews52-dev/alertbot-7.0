@@ -456,4 +456,108 @@ async def is_user_subscribed(uid: int) -> bool:
         await db_pool.release(conn)
 
 
-async def update_subscription(uid: int, days:_
+async def update_subscription(uid: int, days: int):
+    """
+    Активирует или продлевает подписку пользователю.
+    days — на сколько дней продлеваем (используется в промокодах и оплате).
+    """
+    conn = await db_pool.acquire()
+    try:
+        # создаём запись, если её ещё нет
+        await conn.execute(
+            "INSERT OR IGNORE INTO users(id, created_ts, paid) VALUES(?, ?, 0)",
+            (uid, int(time.time())),
+        )
+
+        # берём текущую дату окончания
+        cursor = await conn.execute(
+            "SELECT subscription_expires_at FROM users WHERE id = ?",
+            (uid,),
+        )
+        row = await cursor.fetchone()
+        now = datetime.datetime.now()
+        current_exp = None
+
+        if row and row["subscription_expires_at"]:
+            try:
+                current_exp = datetime.datetime.fromisoformat(
+                    row["subscription_expires_at"]
+                )
+            except Exception:
+                current_exp = None
+
+        # если подписка ещё активна — продлеваем от текущей даты окончания
+        # если уже истекла или пусто — считаем от "сейчас"
+        if current_exp and current_exp > now:
+            new_exp = current_exp + datetime.timedelta(days=days)
+        else:
+            new_exp = now + datetime.timedelta(days=days)
+
+        await conn.execute(
+            """
+            UPDATE users
+            SET paid = 1,
+                subscription_expires_at = ?
+            WHERE id = ?
+            """,
+            (new_exp.isoformat(), uid),
+        )
+        await conn.commit()
+
+        logger.info(
+            f"✅ Subscription updated: user={uid}, +{days} days -> expires {new_exp}"
+        )
+
+    finally:
+        await db_pool.release(conn)
+
+
+async def add_tracked_pair(uid: int, pair: str) -> bool:
+    """
+    Добавить монету пользователю (используется в handlers.py).
+
+    Возвращает:
+        True  - если пара была добавлена впервые
+        False - если такая пара уже была
+    """
+    pair = pair.upper()
+    conn = await db_pool.acquire()
+    try:
+        cursor = await conn.execute(
+            "INSERT OR IGNORE INTO user_pairs(user_id, pair) VALUES(?, ?)",
+            (uid, pair),
+        )
+        await conn.commit()
+        # rowcount > 0 значит, что INSERT сработал (а не проигнорировался)
+        return cursor.rowcount > 0
+    finally:
+        await db_pool.release(conn)
+
+
+async def remove_tracked_pair(uid: int, pair: str) -> bool:
+    """
+    Удалить монету пользователя (используется в handlers.py).
+
+    Возвращает:
+        True  - если пара была удалена
+        False - если такой пары не было
+    """
+    pair = pair.upper()
+    conn = await db_pool.acquire()
+    try:
+        cursor = await conn.execute(
+            "DELETE FROM user_pairs WHERE user_id = ? AND pair = ?",
+            (uid, pair),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db_pool.release(conn)
+
+
+# ==================== INIT ====================
+
+
+async def init_db():
+    """Инициализация базы данных (вызывается из main.py)"""
+    await db_pool.init()
